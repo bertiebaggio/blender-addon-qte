@@ -1,10 +1,12 @@
 """quicker-text-editing.py -- text addon for Blender VSE"""
 import bpy
+import blf
+from os import path
 
 bl_info = {
     "name": "Quicker Text Editing for VSE",
     "author": "bertieb",
-    "version": (0, 9),
+    "version": (0, 10, 1),
     "blender": (3, 3, 0),
     "location": "Video Sequence Editor > Text Strip",
     "description": "Quicker editing of text strips: position, colour, size, duration",
@@ -489,6 +491,62 @@ class QTEPreferences(bpy.types.AddonPreferences, NewQTEPreset):
         box.operator("qte.new_duration_preset", icon='ADD')
 
 
+class SEQUENCER_OT_debug_font_sizing(bpy.types.Operator):
+    """Print font sizing info"""
+    bl_label = "Show font sizing info"
+    bl_idname = "sequencer.debug_font_sizing"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        """Ensure we're in the VSE with at least one sequence selected"""
+        return (context.scene and context.scene.sequence_editor
+                and context.selected_editable_sequences is not None)
+
+    def execute(self, context):
+        """Loop through sequences, printing info about font and text"""
+
+        import blf
+        OUTFILE = "/tmp/blender_font_infos.txt"
+
+        render_rez_x = bpy.data.scenes["Scene"].render.resolution_x
+
+        with open(OUTFILE, "w", encoding="UTF-8") as fh:
+            # bpy.data.fonts
+            fh.write(f"There are {len(bpy.data.fonts)} fonts in bpy.data.fonts:\n")
+            for bpyfont in bpy.data.fonts:
+                fh.write(f"\t{bpyfont}\n")
+            fh.write("*"*72 + "\n\n\n")
+
+            # sequences
+            fh.write(f"There are {len(context.selected_editable_sequences)} sequences\n\n")
+
+            for seq in context.selected_editable_sequences:
+                closest_diff = render_rez_x
+                closest_width = 0
+                closest_id = 0
+                fh.write(f"With sequence '{seq.name}':\n")
+                fh.write(f"\tSequence text: '{seq.text}\'\n")
+                fh.write(f"\tSequence font: '{seq.font}'\n")
+                fh.write(f"\tSequence size: '{seq.font_size}'\n")
+
+                for fid in range(0, 50):
+                    blf.size(fid, seq.font_size)
+                    w, h = blf.dimensions(fid, seq.text)
+                    if w == 0 and h == 0:
+                        continue
+                    fh.write(f"\t\tfid: {fid}\tw: {w}\th: {h}\n")
+                    difference = abs(render_rez_x - w)
+                    if difference < closest_diff:
+                        closest_diff = difference
+                        closest_width = w
+                        closest_id = fid
+
+                fh.write(f"\nClosest candidate:fid={closest_id} at {closest_width} px.\n")
+                fh.write(f"Font id - 25 ({closest_id - 25}) to bpy.data.fonts: {bpy.data.fonts[closest_id-25].name}\n")
+                fh.write("-"*72 + "\n\n")
+
+        return {'FINISHED'}
 REGISTER_CLASSES = [SetTextLocation, SetTextDuration,
                     SetTextSize, SetTextColour,
                     NewQTEColourPreset, NewQTELocationPreset,
@@ -505,6 +563,9 @@ def register():
         bpy.utils.register_class(classname)
     for classname in PREFERENCES_CLASSES:
         bpy.utils.register_class(classname)
+    bpy.utils.register_class(SEQUENCER_OT_split_to_appearing_words)
+    bpy.utils.register_class(SEQUENCER_OT_debug_font_sizing)
+    bpy.types.SEQUENCER_PT_effect_text_style.append(append_to_ts)
 
 
 def unregister():
@@ -512,6 +573,9 @@ def unregister():
         bpy.utils.unregister_class(classname)
     for classname in PREFERENCES_CLASSES:
         bpy.utils.unregister_class(classname)
+    bpy.utils.unregister_class(SEQUENCER_OT_split_to_appearing_words)
+    bpy.utils.unregister_class(SEQUENCER_OT_debug_font_sizing)
+    bpy.types.SEQUENCER_PT_effect_text_style.remove(append_to_ts)
 
 
 if __name__ == "__main__":
