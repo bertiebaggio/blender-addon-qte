@@ -1,7 +1,7 @@
 """quicker-text-editing.py -- text addon for Blender VSE"""
+from os import path
 import bpy
 import blf
-from os import path
 
 bl_info = {
     "name": "Quicker Text Editing for VSE",
@@ -14,6 +14,8 @@ bl_info = {
     "doc_url": "",
     "category": "Sequencer",
 }
+
+# BEGIN text sequence manipulation (colour/location/etc)
 
 
 class TextSequenceAction(bpy.types.Operator):
@@ -503,10 +505,16 @@ class QTEPreferences(bpy.types.AddonPreferences, NewQTEPreset):
         box.operator("qte.new_duration_preset", icon='ADD')
 
 
-class SEQUENCER_OT_debug_font_sizing(bpy.types.Operator):
-    """Print font sizing info"""
-    bl_label = "Show font sizing info"
-    bl_idname = "sequencer.debug_font_sizing"
+# END text sequence manipulation (colour/location/etc)
+
+
+class SEQUENCER_OT_split_to_appearing_words(TextSequenceAction):
+    """Split the text in a text sequence to several text sequences
+
+    The words should appear one after another in both time and space"""
+
+    bl_label = "Convert to appearing words"
+    bl_idname = "sequencer.split_to_appearing_words"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -516,49 +524,103 @@ class SEQUENCER_OT_debug_font_sizing(bpy.types.Operator):
                 and context.selected_editable_sequences is not None)
 
     def execute(self, context):
-        """Loop through sequences, printing info about font and text"""
+        """Do the actual creation of new strips"""
 
-        import blf
-        OUTFILE = "/tmp/blender_font_infos.txt"
+        def get_strip_text_size(strip, text=None):
+            """get the size of supplied text based on strip font in px"""
+            def get_fontid_from_path(filepath=None) -> int:
+                """given a filepath, use blf to get a fontid -- does not perform sanity checking!
+                """
+                # this is a horrible workaround, see
+                # https://devtalk.blender.org/t/getting-a-font-from-fontid-or-fontid-from-vectorfont-textsequence/28183/2
+                # for more info
+                return blf.load(path.normpath(bpy.path.abspath(filepath)))
 
-        render_rez_x = bpy.data.scenes["Scene"].render.resolution_x
+            fontid = get_fontid_from_path(filepath=strip.font.filepath)
+            blf.size(fontid, strip.font_size)
+            return blf.dimensions(fontid, text)
 
-        with open(OUTFILE, "w", encoding="UTF-8") as fh:
-            # bpy.data.fonts
-            fh.write(f"There are {len(bpy.data.fonts)} fonts in bpy.data.fonts:\n")
-            for bpyfont in bpy.data.fonts:
-                fh.write(f"\t{bpyfont}\n")
-            fh.write("*"*72 + "\n\n\n")
+        OFFSET = 12  # frames (?)
+        scene = context.scene
+        rez_x = scene.render.resolution_x
 
-            # sequences
-            fh.write(f"There are {len(context.selected_editable_sequences)} sequences\n\n")
+        # sanity check (FUTURE: see if there's a way to work on multiple in a sensible way)
+        if len(context.selected_editable_sequences) != 1:
+            self.report({"ERROR"}, "This only works on one text sequence at a time")
+            return {"CANCELLED"}
 
-            for seq in context.selected_editable_sequences:
-                closest_diff = render_rez_x
-                closest_width = 0
-                closest_id = 0
-                fh.write(f"With sequence '{seq.name}':\n")
-                fh.write(f"\tSequence text: '{seq.text}\'\n")
-                fh.write(f"\tSequence font: '{seq.font}'\n")
-                fh.write(f"\tSequence size: '{seq.font_size}'\n")
+        sequence = context.selected_editable_sequences[0]
 
-                for fid in range(0, 50):
-                    blf.size(fid, seq.font_size)
-                    w, h = blf.dimensions(fid, seq.text)
-                    if w == 0 and h == 0:
-                        continue
-                    fh.write(f"\t\tfid: {fid}\tw: {w}\th: {h}\n")
-                    difference = abs(render_rez_x - w)
-                    if difference < closest_diff:
-                        closest_diff = difference
-                        closest_width = w
-                        closest_id = fid
+        # next sanity check: text sequence with > 1 word
+        if sequence.type != 'TEXT':
+            self.report({"ERROR"}, "This should only be availabe on text sequences!")
+            return {"CANCELLED"}
 
-                fh.write(f"\nClosest candidate:fid={closest_id} at {closest_width} px.\n")
-                fh.write(f"Font id - 25 ({closest_id - 25}) to bpy.data.fonts: {bpy.data.fonts[closest_id-25].name}\n")
-                fh.write("-"*72 + "\n\n")
+        if len(sequence.text.split(" ")) <= 1:
+            self.report({"ERROR"}, "This requires more than one word to split on")
+            return {"CANCELLED"}
+
+        # main body of work:
+        previous_strip = None
+        ts_words = sequence.text.split(" ")
+        for i, word in enumerate(ts_words):
+            # new_strip = bpy.ops.sequencer.effect_strip_add(
+            # replace_sel=False,
+
+            # Set times for new strip
+            # new_strip = scene.sequence_editor.sequences.new_effect(
+            #     name=f"split_word_{i}", type='TEXT',
+            #     frame_start=int(sequence.frame_start+(i*OFFSET)),
+            #     frame_end=int(sequence.frame_final_end),
+            #     channel=int(sequence.channel+1+i),
+            # )
+
+            # Set position for new strip
+            #
+            # For the first strip (i=0), set location to 'parent' strip. For subsequent
+            # strips, use the position of the previous strip plus the length of the word
+            # plus an inter-word offset.
+            #
+            # Start from parent strip's location and alignment
+            #
+            # Maybe TO DO: line splitting
+
+            # Give new strip the same properties as the old one
+            bpy.ops.sequencer.duplicate()
+            new_strip = context.selected_editable_sequences[0]
+            new_strip.name = f"split_word_{i}"
+            new_strip.frame_start = int(sequence.frame_start + i*OFFSET)
+            new_strip.frame_final_end = int(sequence.frame_final_end)
+            new_strip.channel = (sequence.channel+1+i)
+
+            if i == 0:
+                new_strip.location[0] = sequence.location[0]
+            else:
+                # New location is previous strip location
+                #  + previous strip width
+                #  + width of space
+                new_strip.location[0] = previous_strip.location[0] + \
+                    (get_strip_text_size(sequence, text=previous_strip.text)[0] / rez_x) + \
+                    (get_strip_text_size(sequence, text=" ")[0] / rez_x)
+
+            new_strip.text = word
+
+            # feels smelly, but keep a reference for the next loop for location
+            previous_strip = new_strip
+
+        sequence.mute = True
+
+        context.scene.frame_current = int(sequence.frame_start + sequence.frame_final_duration - 1)
 
         return {'FINISHED'}
+
+
+def append_to_ts(self, context):
+    """TODO: check this is the right way to do this"""
+    self.layout.separator()
+    self.layout.operator("sequencer.split_to_appearing_words")
+
+
 REGISTER_CLASSES = [SetTextLocation, SetTextDuration,
                     SetTextSize, SetTextColour,
                     NewQTEColourPreset, NewQTELocationPreset,
@@ -576,7 +638,6 @@ def register():
     for classname in PREFERENCES_CLASSES:
         bpy.utils.register_class(classname)
     bpy.utils.register_class(SEQUENCER_OT_split_to_appearing_words)
-    bpy.utils.register_class(SEQUENCER_OT_debug_font_sizing)
     bpy.types.SEQUENCER_PT_effect_text_style.append(append_to_ts)
 
 
@@ -586,7 +647,6 @@ def unregister():
     for classname in PREFERENCES_CLASSES:
         bpy.utils.unregister_class(classname)
     bpy.utils.unregister_class(SEQUENCER_OT_split_to_appearing_words)
-    bpy.utils.unregister_class(SEQUENCER_OT_debug_font_sizing)
     bpy.types.SEQUENCER_PT_effect_text_style.remove(append_to_ts)
 
 
