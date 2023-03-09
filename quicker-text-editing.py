@@ -495,6 +495,26 @@ class QTEPreferences(bpy.types.AddonPreferences, NewQTEPreset):
 
 # END text sequence manipulation (colour/location/etc)
 
+# BEGIN split to appearing words
+
+class AppearingWordsOptions(bpy.types.PropertyGroup):
+    """Holds the options. This is needed as both the operator itself
+    and any panels for configuration need access to the options
+
+    See:
+    - https://blenderartists.org/t/storing-property-in-operator-which-can-be-set-by-ui-panel/1332800/3
+    - https://blenderartists.org/t/is-storing-operator-options-in-the-scene-window-manager-etc-still-the-way-to-go-in-2023/1454103
+    """
+
+    time_offset: bpy.props.FloatProperty(
+        name="Time offset",
+        default=0.5,
+        min=0.0,
+        soft_max=5,
+        step=5,
+        description="Time between words appearing",
+    )  # TODO: update function
+
 
 class SEQUENCER_OT_split_to_appearing_words(TextSequenceAction):
     """Split the text in a text sequence to several text sequences
@@ -513,6 +533,9 @@ class SEQUENCER_OT_split_to_appearing_words(TextSequenceAction):
 
     def execute(self, context):
         """Do the actual creation of new strips"""
+        # TODO: make options available, eg:
+        # - time/frame offset
+        # - inter-word spacing adjustments
 
         def get_strip_text_size(strip, text=None):
             """get the size of supplied text based on strip font in px"""
@@ -528,7 +551,7 @@ class SEQUENCER_OT_split_to_appearing_words(TextSequenceAction):
             blf.size(fontid, strip.font_size)
             return blf.dimensions(fontid, text)
 
-        OFFSET = 12  # frames (?)
+        prop_group = context.window_manager.appearing_text_options
         scene = context.scene
         rez_x = scene.render.resolution_x
 
@@ -552,19 +575,16 @@ class SEQUENCER_OT_split_to_appearing_words(TextSequenceAction):
         previous_strip = None
         ts_words = sequence.text.split(" ")
         for i, word in enumerate(ts_words):
-            # new_strip = bpy.ops.sequencer.effect_strip_add(
-            # replace_sel=False,
-
+            # Give new strip the same properties as the old one
+            bpy.ops.sequencer.duplicate()
+            new_strip = context.selected_editable_sequences[0]
+            new_strip.name = f"split_word_{i}"
             # Set times for new strip
-            # new_strip = scene.sequence_editor.sequences.new_effect(
-            #     name=f"split_word_{i}", type='TEXT',
-            #     frame_start=int(sequence.frame_start+(i*OFFSET)),
-            #     frame_end=int(sequence.frame_final_end),
-            #     channel=int(sequence.channel+1+i),
-            # )
+            new_strip.frame_start = int(sequence.frame_start + i*int(prop_group.time_offset))
+            new_strip.frame_final_end = int(sequence.frame_final_end)
+            new_strip.channel = (sequence.channel+1+i)
 
             # Set position for new strip
-            #
             # For the first strip (i=0), set location to 'parent' strip. For subsequent
             # strips, use the position of the previous strip plus the length of the word
             # plus an inter-word offset.
@@ -572,15 +592,6 @@ class SEQUENCER_OT_split_to_appearing_words(TextSequenceAction):
             # Start from parent strip's location and alignment
             #
             # Maybe TO DO: line splitting
-
-            # Give new strip the same properties as the old one
-            bpy.ops.sequencer.duplicate()
-            new_strip = context.selected_editable_sequences[0]
-            new_strip.name = f"split_word_{i}"
-            new_strip.frame_start = int(sequence.frame_start + i*OFFSET)
-            new_strip.frame_final_end = int(sequence.frame_final_end)
-            new_strip.channel = (sequence.channel+1+i)
-
             if i == 0:
                 new_strip.location[0] = sequence.location[0]
             else:
@@ -603,8 +614,23 @@ class SEQUENCER_OT_split_to_appearing_words(TextSequenceAction):
         return {'FINISHED'}
 
 
-def append_to_ts(self, context):
-    """TODO: check this is the right way to do this"""
+class SEQUENCER_PT_appearing_text(bpy.types.Panel):
+    """Panel for appearing text"""
+    bl_label = "Appearing Words"
+    bl_space_type = "SEQUENCE_EDITOR"
+    bl_region_type = "UI"
+
+    def draw(self, context):
+        """Draw the appearing text panel"""
+        prop_group = context.window_manager.appearing_text_options
+        layout = self.layout
+
+        layout.operator("sequencer.split_to_appearing_words")
+        layout.prop(prop_group, "time_offset", slider=True)
+
+
+def appearing_text_panel_layout(self, context):
+    """Set up panel for appearing text: operator button plus options"""
     self.layout.separator()
     self.layout.operator("sequencer.split_to_appearing_words")
 
@@ -613,10 +639,13 @@ REGISTER_CLASSES = [SetTextLocation, SetTextDuration,
                     SetTextSize, SetTextColour,
                     NewQTEColourPreset, NewQTELocationPreset,
                     NewQTESizePreset, NewQTEDurationPreset,
-                    SAMPLE_OT_DirtyKeymap, QTERemoveKeyMapItem]
+                    SAMPLE_OT_DirtyKeymap, QTERemoveKeyMapItem,
+                    SEQUENCER_OT_split_to_appearing_words,
+                    SEQUENCER_PT_appearing_text]
 DYNAMIC_CLASSES = []
 PREFERENCES_CLASSES = [LocationPresets,
                        SizePresets, DurationPresets,
+                       AppearingWordsOptions,
                        QTEPreferences]
 
 
@@ -625,8 +654,10 @@ def register():
         bpy.utils.register_class(classname)
     for classname in PREFERENCES_CLASSES:
         bpy.utils.register_class(classname)
-    bpy.utils.register_class(SEQUENCER_OT_split_to_appearing_words)
-    bpy.types.SEQUENCER_PT_effect_text_style.append(append_to_ts)
+    bpy.types.SEQUENCER_PT_effect.append(appearing_text_panel_layout)
+
+    bpy.types.WindowManager.appearing_text_options = \
+        bpy.props.PointerProperty(type=AppearingWordsOptions)
 
 
 def unregister():
@@ -634,8 +665,9 @@ def unregister():
         bpy.utils.unregister_class(classname)
     for classname in PREFERENCES_CLASSES:
         bpy.utils.unregister_class(classname)
-    bpy.utils.unregister_class(SEQUENCER_OT_split_to_appearing_words)
-    bpy.types.SEQUENCER_PT_effect_text_style.remove(append_to_ts)
+    bpy.types.SEQUENCER_PT_effect.remove(appearing_text_panel_layout)
+
+    del bpy.types.WindowManager.appearing_text_options
 
 
 if __name__ == "__main__":
