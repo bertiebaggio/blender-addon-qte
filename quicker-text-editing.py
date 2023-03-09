@@ -505,15 +505,40 @@ class AppearingWordsOptions(bpy.types.PropertyGroup):
     - https://blenderartists.org/t/storing-property-in-operator-which-can-be-set-by-ui-panel/1332800/3
     - https://blenderartists.org/t/is-storing-operator-options-in-the-scene-window-manager-etc-still-the-way-to-go-in-2023/1454103
     """
+    def __init__(self, *args, **kwargs):
+        self.time_offset = 1.0
+        self.frame_offset = int(self.time_offset * self.get_fps())
+
+    def get_fps(self):
+        return float(bpy.context.scene.render.fps / bpy.context.scene.render.fps_base)
+
+    def update_frames_from_time(self, context):
+        """When time offset changes, update the frame gap to match (based on FPS)"""
+        self.frame_offset = int(self.time_offset * self.get_fps())
+
+    def update_time_from_frames(self, context):
+        """When frame offset changes, update the time gap to match (based on FPS)"""
+        self.time_offset = self.frame_offset / self.get_fps()
 
     time_offset: bpy.props.FloatProperty(
         name="Time offset",
-        default=0.5,
+        default=1,
         min=0.0,
         soft_max=5,
         step=5,
         description="Time between words appearing",
-    )  # TODO: update function
+        update=update_frames_from_time,
+    )
+
+    frame_offset: bpy.props.IntProperty(
+        name="Frame offset",
+        default=0,
+        min=0,
+        soft_max=300,
+        step=5,
+        description="Frames between words appearing",
+        update=update_time_from_frames,
+    )
 
 
 class SEQUENCER_OT_split_to_appearing_words(TextSequenceAction):
@@ -534,7 +559,6 @@ class SEQUENCER_OT_split_to_appearing_words(TextSequenceAction):
     def execute(self, context):
         """Do the actual creation of new strips"""
         # TODO: make options available, eg:
-        # - time/frame offset
         # - inter-word spacing adjustments
 
         def get_strip_text_size(strip, text=None):
@@ -580,7 +604,7 @@ class SEQUENCER_OT_split_to_appearing_words(TextSequenceAction):
             new_strip = context.selected_editable_sequences[0]
             new_strip.name = f"split_word_{i}"
             # Set times for new strip
-            new_strip.frame_start = int(sequence.frame_start + i*int(prop_group.time_offset))
+            new_strip.frame_start = int(sequence.frame_start + i*int(prop_group.frame_offset))
             new_strip.frame_final_end = int(sequence.frame_final_end)
             new_strip.channel = (sequence.channel+1+i)
 
@@ -627,6 +651,7 @@ class SEQUENCER_PT_appearing_text(bpy.types.Panel):
 
         layout.operator("sequencer.split_to_appearing_words")
         layout.prop(prop_group, "time_offset", slider=True)
+        layout.prop(prop_group, "frame_offset", slider=True)
 
 
 def appearing_text_panel_layout(self, context):
