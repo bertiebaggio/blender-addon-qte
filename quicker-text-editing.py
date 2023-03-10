@@ -497,6 +497,23 @@ class QTEPreferences(bpy.types.AddonPreferences, NewQTEPreset):
 
 # BEGIN split to appearing words
 
+# TODO: Ask question if it is common / good practice to 'pull out'
+# enum items this way
+aw_temporal_offset_options = [
+    ("Fixed", "Fixed Offset",
+     "New strips will be this number of frames / seconds ahead of previous strip"),
+    ("RelativeLength", "Time Offset adjusted by word length",
+     "Strips will adjust timing based on the length of the previous word \
+compared to the average (ie longer words = bigger gap)"),
+    ("ParentEqual", "Use Parent Duration (Equally-divided)",
+     "New strips will use the duration of the parent sentence strip \
+and appear at equally-distributed times"),
+    ("ParentRelativeLength", "Use Parent Duration (Relative to word length)",
+     "New strips will use the duration of the parent sentence strip \
+and appear at times proportional to the word length (longer words = bigger gap)"),
+]
+
+
 class AppearingWordsOptions(bpy.types.PropertyGroup):
     """Holds the options. This is needed as both the operator itself
     and any panels for configuration need access to the options
@@ -540,6 +557,12 @@ class AppearingWordsOptions(bpy.types.PropertyGroup):
         update=update_time_from_frames,
     )
 
+    temporal_offset_type: bpy.props.EnumProperty(
+        name="Time offset type",
+        description="How to set the time gap between words appearing",
+        items=aw_temporal_offset_options,
+    )
+
 
 class SEQUENCER_OT_split_to_appearing_words(TextSequenceAction):
     """Split the text in a text sequence to several text sequences
@@ -558,8 +581,7 @@ class SEQUENCER_OT_split_to_appearing_words(TextSequenceAction):
 
     def execute(self, context):
         """Do the actual creation of new strips"""
-        # TODO: make options available, eg:
-        # - inter-word spacing adjustments
+        # TODO: inter-word spacing adjustments
 
         def get_strip_text_size(strip, text=None):
             """get the size of supplied text based on strip font in px"""
@@ -595,16 +617,42 @@ class SEQUENCER_OT_split_to_appearing_words(TextSequenceAction):
             self.report({"ERROR"}, "This requires more than one word to split on")
             return {"CANCELLED"}
 
-        # main body of work:
+        # main body of work
         previous_strip = None
         ts_words = sequence.text.split(" ")
+        ts_letters_count = sum(map(len, ts_words))
+        average_word_length = ts_letters_count / len(ts_words)
+
         for i, word in enumerate(ts_words):
             # Give new strip the same properties as the old one
+            # Assumption: duplicate() changes selection to newly-created strip
+            # so we can use that selection to reference the new strip
             bpy.ops.sequencer.duplicate()
             new_strip = context.selected_editable_sequences[0]
             new_strip.name = f"split_word_{i}"
+
             # Set times for new strip
-            new_strip.frame_start = int(sequence.frame_start + i*int(prop_group.frame_offset))
+            # NB since strip is duplicated, no need to set first strip's (i==0) start_frame
+            # TODO: minimum length
+            if i > 0:
+                if prop_group.temporal_offset_type == "Fixed":
+                    # All fixed offset
+                    offset = prop_group.frame_offset
+                if prop_group.temporal_offset_type == "RelativeLength":
+                    # relative to the 'fixed offset', some will be shorter and some will be longer
+                    # based on the length of word compared to average
+                    offset = prop_group.frame_offset * \
+                        (len(previous_strip.text) / average_word_length)
+                elif prop_group.temporal_offset_type == "ParentEqual":
+                    # All the same but based on parent duration
+                    offset = int(sequence.frame_final_duration / len(ts_words))
+                elif prop_group.temporal_offset_type == "ParentRelativeLength":
+                    # Relative to parent duration but modified by previous word length
+                    # eg 'of' (short) 'farce' (medium) 'narrativism' (long)
+                    # use average from 'ParentEqual' multipled by wordlength/averagelength
+                    offset = int(sequence.frame_final_duration / len(ts_words)) * \
+                        (len(previous_strip.text) / average_word_length)
+                new_strip.frame_start = int(previous_strip.frame_start + offset)
             new_strip.frame_final_end = int(sequence.frame_final_end)
             new_strip.channel = (sequence.channel+1+i)
 
@@ -649,9 +697,23 @@ class SEQUENCER_PT_appearing_text(bpy.types.Panel):
         prop_group = context.window_manager.appearing_text_options
         layout = self.layout
 
-        layout.operator("sequencer.split_to_appearing_words")
-        layout.prop(prop_group, "time_offset", slider=True)
-        layout.prop(prop_group, "frame_offset", slider=True)
+        layout.label(text="Time Offset Type", icon='TEMP')
+        layout.prop(prop_group, "temporal_offset_type", text="")
+        # identifiers = [enum_item[0] for enum_item in aw_temporal_offset_options]
+        # selected_item_index = identifiers.index(prop_group.temporal_offset_type)
+        # for line in [line for line
+        #              in aw_temporal_offset_options[
+        # selected_item_index][2].split(".") if len(line)]:
+        #     # layout.label(text=aw_temporal_offset_options[selected_item_index][2])
+        #     layout.label(text=line)
+        layout.separator()
+
+        if prop_group.temporal_offset_type != "ParentEqual":
+            layout.prop(prop_group, "time_offset", slider=True)
+            layout.prop(prop_group, "frame_offset", slider=True)
+        layout.separator(factor=2.0)
+        box = layout.box()
+        box.operator("sequencer.split_to_appearing_words", icon='OUTLINER')
 
 
 def appearing_text_panel_layout(self, context):
