@@ -8,6 +8,9 @@ Do you make videos in Blender? Do you work with lots of text sequences in the VS
   - [Summary](#summary)
   - [Installation](#installation)
   - [Usage](#usage)
+      - [Setting Presets and Hotkeys](#setting-presets-and-hotkeys)
+      - [Splitting Text to Appearing Words](#splitting-text-to-appearing-words)
+          - [Options](#options)
   - [Roadmap](#roadmap)
   - [Background and Development](#background-and-development)
 
@@ -23,13 +26,31 @@ QTE lets you bind hotkeys for common actions on text strips, like setting colour
 
 Download quicker-text-editing.py from the releases section, then add it to Blender from Preferences > Add-ons > Install... (from file)
 
-[//]: <> (TODO check this)
-
 QTE was developed against the [Blender 3.3 API](https://docs.blender.org/api/current/index.html), and has not been tested with earlier versions. If you are on an earlier version, either upgrade or use at your own risk!
 
 ## Usage
 
+### Setting Presets and Hotkeys
 To add an action, go to Preferences > Add-ons, make sure 'Quicker text editing for VSE' is enabled, then add a colour, location, size or duration preset. You can then set what it to be applied (eg a colour), and the key combo to apply this.
+
+### Splitting Text to Appearing Words
+
+The 'Convert to appearing words' button is located in the 'Style' section of the N panel (sidebar), with further options in the 'QTE' tab.
+
+This operator takes a text strip with multiple words and splits it into individual text strips. These created strips are offset in both time (so they 'appear' as playback progresses) and space (so they appear in the same place they would as if they were in the original text strip.
+
+#### Options
+
+There are options to adjust the timing of words appearing:
+
+  - Fixed: New strips will be this number of frames / seconds ahead of previous strip _(default: 0.5)_
+  - Offset adjusted by word length: Strips will adjust timing based on the length of the previous word compared to the average (longer words = bigger gap)
+  - Parent Duration (Equally-divided): New strips will appear at equally-distributed times based on parent strip duration divided by number of words
+  - Parent Duration (Relative to word length): New strips will use the duration of the parent sentence strip and appear at times proportional to the word length (longer words = bigger gap)
+
+There is also an option to adjust the inter-word spacing:
+
+ - Extra word spacing: Increase or decrease horizontal space between words _(default: 0)_
 
 ## Roadmap
 
@@ -43,6 +64,4 @@ The following features are one of: planned, nice-to-have, or pie-in-the-sky. Not
 
 Improvements, feature suggestions and PRs are very welcome.
 
-If you want to know more about the background for this addon, I have a [series of posts](https://blog.roberthallam.org/tag/qte) that cover the why, how and what. 
-
-[//2]: <> (TODO: create this tag)
+If you want to know more about the background for this addon, I have a [series of posts](https://blog.roberthallam.org/tag/qte) that cover the why, how and what.
