@@ -1,10 +1,12 @@
 """quicker-text-editing.py -- text addon for Blender VSE"""
+from os import path
 import bpy
+import blf
 
 bl_info = {
     "name": "Quicker Text Editing for VSE",
     "author": "bertieb",
-    "version": (0, 9),
+    "version": (0, 10, 1),
     "blender": (3, 3, 0),
     "location": "Video Sequence Editor > Text Strip",
     "description": "Quicker editing of text strips: position, colour, size, duration",
@@ -12,6 +14,8 @@ bl_info = {
     "doc_url": "",
     "category": "Sequencer",
 }
+
+# BEGIN text sequence manipulation (colour/location/etc)
 
 
 class TextSequenceAction(bpy.types.Operator):
@@ -501,14 +505,267 @@ class QTEPreferences(bpy.types.AddonPreferences, NewQTEPreset):
         box.operator("qte.new_duration_preset", icon='ADD')
 
 
+# END text sequence manipulation (colour/location/etc)
+
+# BEGIN split to appearing words
+
+# TODO: Ask question if it is common / good practice to 'pull out'
+# enum items this way
+aw_temporal_offset_options = [
+    ("Fixed", "Fixed Offset",
+     "New strips will be this number of frames / seconds ahead of previous strip"),
+    ("RelativeLength", "Offset relative to word length",
+     "Strips will adjust timing based on the length of the previous word \
+compared to the average (ie longer words = bigger gap)"),
+    ("ParentEqual", "Parent Duration (Equally-divided)",
+     "New strips will use the duration of the parent sentence strip \
+and appear at equally-distributed times"),
+    ("ParentRelativeLength", "Parent Duration (Relative to word length)",
+     "New strips will use the duration of the parent sentence strip \
+and appear at times proportional to the word length (longer words = bigger gap)"),
+]
+
+
+class AppearingWordsOptions(bpy.types.PropertyGroup):
+    """Holds the options. This is needed as both the operator itself
+    and any panels for configuration need access to the options
+
+    See:
+    - https://blenderartists.org/t/storing-property-in-operator-which-can-be-set-by-ui-panel/1332800/3
+    - https://blenderartists.org/t/is-storing-operator-options-in-the-scene-window-manager-etc-still-the-way-to-go-in-2023/1454103
+    """
+
+    def get_fps(self):
+        return float(bpy.context.scene.render.fps / bpy.context.scene.render.fps_base)
+
+    def update_frames_from_time(self, context):
+        """When time offset changes, update the frame gap to match (based on FPS)"""
+        # see https://blender.stackexchange.com/a/102019/157744
+        self["frame_offset"] = int(self.time_offset * self.get_fps())
+
+    def update_time_from_frames(self, context):
+        """When frame offset changes, update the time gap to match (based on FPS)"""
+        self["time_offset"] = self.frame_offset / self.get_fps()
+
+    time_offset: bpy.props.FloatProperty(
+        name="Time offset",
+        default=0.5,
+        min=0.0,
+        soft_max=5,
+        step=5,
+        description="Time between words appearing",
+        update=update_frames_from_time,
+    )
+
+    frame_offset: bpy.props.IntProperty(
+        name="Frame offset",
+        default=-1,
+        min=0,
+        soft_max=300,
+        step=1,
+        description="Frames between words appearing",
+        update=update_time_from_frames,
+    )
+
+    temporal_offset_type: bpy.props.EnumProperty(
+        name="Time offset type",
+        description="How to set the time gap between words appearing",
+        items=aw_temporal_offset_options,
+    )
+
+    extra_word_spacing: bpy.props.FloatProperty(
+        name="Extra word spacing",
+        description="Increase or decrease horizontal space between words",
+        default=0.0,
+        soft_min=-3.0, soft_max=3.0,
+    )
+
+
+class SEQUENCER_OT_split_to_appearing_words(TextSequenceAction):
+    """Split the text in a text sequence to several text sequences
+
+    The words should appear one after another in both time and space"""
+
+    bl_label = "Convert to appearing words"
+    bl_idname = "sequencer.split_to_appearing_words"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        """Ensure we're in the VSE with at least one sequence selected"""
+        return (context.scene and context.scene.sequence_editor
+                and context.selected_editable_sequences is not None)
+
+    def execute(self, context):
+        """Do the actual creation of new strips"""
+
+        def get_strip_text_size(strip, text=None):
+            """get the size of supplied text based on strip font in px"""
+            def get_fontid_from_path(filepath=None) -> int:
+                """given a filepath, use blf to get a fontid -- does not perform sanity checking!
+                """
+                # this is a horrible workaround, see
+                # https://devtalk.blender.org/t/getting-a-font-from-fontid-or-fontid-from-vectorfont-textsequence/28183/2
+                # for more info
+                return blf.load(path.normpath(bpy.path.abspath(filepath)))
+
+            fontid = get_fontid_from_path(filepath=strip.font.filepath)
+            blf.size(fontid, strip.font_size)
+            return blf.dimensions(fontid, text)
+
+        prop_group = context.window_manager.appearing_text_options
+        scene = context.scene
+        rez_x = scene.render.resolution_x
+
+        # sanity check (FUTURE: see if there's a way to work on multiple in a sensible way)
+        if len(context.selected_editable_sequences) != 1:
+            self.report({"ERROR"}, "This only works on one text sequence at a time")
+            return {"CANCELLED"}
+
+        sequence = context.selected_editable_sequences[0]
+
+        # next sanity check: text sequence with > 1 word
+        if sequence.type != 'TEXT':
+            self.report({"ERROR"}, "This should only be availabe on text sequences!")
+            return {"CANCELLED"}
+
+        if len(sequence.text.split(" ")) <= 1:
+            self.report({"ERROR"}, "This requires more than one word to split on")
+            return {"CANCELLED"}
+
+        # main body of work
+        previous_strip = None
+        ts_words = sequence.text.split(" ")
+        ts_letters_count = sum(map(len, ts_words))
+        average_word_length = ts_letters_count / len(ts_words)
+
+        # Pre-start sanity check: if somehow the frame_offset is < 0 (eg it is still at
+        # its default of -1), set it to 1
+        if prop_group.frame_offset < 0:
+            prop_group.frame_offset = 1
+
+        for i, word in enumerate(ts_words):
+            # Give new strip the same properties as the old one
+            # Assumption: duplicate() changes selection to newly-created strip
+            # so we can use that selection to reference the new strip
+            bpy.ops.sequencer.duplicate()
+            new_strip = context.selected_editable_sequences[0]
+            new_strip.name = f"split_word_{i}"
+
+            # Set times for new strip
+            # NB since strip is duplicated, no need to set first strip's (i==0) start_frame
+            # TODO: minimum length
+            if i > 0:
+                if prop_group.temporal_offset_type == "Fixed":
+                    # All fixed offset
+                    offset = prop_group.frame_offset
+                if prop_group.temporal_offset_type == "RelativeLength":
+                    # relative to the 'fixed offset', some will be shorter and some will be longer
+                    # based on the length of word compared to average
+                    offset = prop_group.frame_offset * \
+                        (len(previous_strip.text) / average_word_length)
+                elif prop_group.temporal_offset_type == "ParentEqual":
+                    # All the same but based on parent duration
+                    offset = int(sequence.frame_final_duration / len(ts_words))
+                elif prop_group.temporal_offset_type == "ParentRelativeLength":
+                    # Relative to parent duration but modified by previous word length
+                    # eg 'of' (short) 'farce' (medium) 'narrativism' (long)
+                    # use average from 'ParentEqual' multipled by wordlength/averagelength
+                    offset = int(sequence.frame_final_duration / len(ts_words)) * \
+                        (len(previous_strip.text) / average_word_length)
+                new_strip.frame_start = int(previous_strip.frame_start + offset)
+            new_strip.frame_final_end = int(sequence.frame_final_end)
+            new_strip.channel = (sequence.channel+1+i)
+
+            # Set position for new strip
+            # For the first strip (i=0), set location to 'parent' strip. For subsequent
+            # strips, use the position of the previous strip plus the length of the word
+            # plus an inter-word offset.
+            #
+            # Start from parent strip's location and alignment
+            #
+            # stretch goal: line splitting
+            if i == 0:
+                new_strip.location[0] = sequence.location[0]
+            else:
+                # New location is previous strip location
+                #  + previous strip width
+                #  + width of space
+                #  + extra spacing specified by user
+                new_strip.location[0] = previous_strip.location[0] + \
+                    (get_strip_text_size(sequence, text=previous_strip.text)[0] / rez_x) + \
+                    (get_strip_text_size(sequence, text=" ")[0] / rez_x) + \
+                    (prop_group.extra_word_spacing *
+                     get_strip_text_size(sequence, text=" ")[0]/rez_x)
+
+            new_strip.text = word
+
+            # feels smelly, but keep a reference for the next loop for location
+            previous_strip = new_strip
+
+        sequence.mute = True
+
+        context.scene.frame_current = int(sequence.frame_start + sequence.frame_final_duration - 1)
+
+        return {'FINISHED'}
+
+
+class SEQUENCER_PT_appearing_text(bpy.types.Panel):
+    """Panel for appearing text"""
+    bl_label = "Appearing Words"
+    bl_space_type = "SEQUENCE_EDITOR"
+    bl_region_type = "UI"
+    bl_category = "QTE"
+
+    def draw(self, context):
+        """Draw the appearing text panel"""
+        prop_group = context.window_manager.appearing_text_options
+        layout = self.layout
+
+        layout.label(text="Time Offset Type", icon='TEMP')
+        layout.prop(prop_group, "temporal_offset_type", text="")
+        # identifiers = [enum_item[0] for enum_item in aw_temporal_offset_options]
+        # selected_item_index = identifiers.index(prop_group.temporal_offset_type)
+        # for line in [line for line
+        #              in aw_temporal_offset_options[
+        # selected_item_index][2].split(".") if len(line)]:
+        #     # layout.label(text=aw_temporal_offset_options[selected_item_index][2])
+        #     layout.label(text=line)
+        layout.separator()
+
+        if prop_group.temporal_offset_type not in ("ParentEqual", "ParentRelativeLength"):
+            layout.prop(prop_group, "time_offset")
+            # find out if better way to set a default that depends on
+            # FPS (ie cannot be set in definition)
+            if prop_group.frame_offset == -1:
+                prop_group.frame_offset = int(prop_group.time_offset *
+                                              float(bpy.context.scene.render.fps /
+                                                    bpy.context.scene.render.fps_base)
+                                              )
+            layout.prop(prop_group, "frame_offset")
+        layout.prop(prop_group, "extra_word_spacing", slider=True)
+        layout.separator(factor=2.0)
+        box = layout.box()
+        box.operator("sequencer.split_to_appearing_words", icon='OUTLINER')
+
+
+def appearing_text_panel_layout(self, context):
+    """Set up panel for appearing text: operator button plus options"""
+    self.layout.separator()
+    self.layout.operator("sequencer.split_to_appearing_words")
+
+
 REGISTER_CLASSES = [SetTextLocation, SetTextDuration,
                     SetTextSize, SetTextColour,
                     NewQTEColourPreset, NewQTELocationPreset,
                     NewQTESizePreset, NewQTEDurationPreset,
-                    SAMPLE_OT_DirtyKeymap, QTERemoveKeyMapItem]
+                    SAMPLE_OT_DirtyKeymap, QTERemoveKeyMapItem,
+                    SEQUENCER_OT_split_to_appearing_words,
+                    SEQUENCER_PT_appearing_text]
 DYNAMIC_CLASSES = []
 PREFERENCES_CLASSES = [LocationPresets,
                        SizePresets, DurationPresets,
+                       AppearingWordsOptions,
                        QTEPreferences]
 
 
@@ -517,6 +774,10 @@ def register():
         bpy.utils.register_class(classname)
     for classname in PREFERENCES_CLASSES:
         bpy.utils.register_class(classname)
+    bpy.types.SEQUENCER_PT_effect.append(appearing_text_panel_layout)
+
+    bpy.types.WindowManager.appearing_text_options = \
+        bpy.props.PointerProperty(type=AppearingWordsOptions)
 
 
 def unregister():
@@ -524,6 +785,9 @@ def unregister():
         bpy.utils.unregister_class(classname)
     for classname in PREFERENCES_CLASSES:
         bpy.utils.unregister_class(classname)
+    bpy.types.SEQUENCER_PT_effect.remove(appearing_text_panel_layout)
+
+    del bpy.types.WindowManager.appearing_text_options
 
 
 if __name__ == "__main__":
