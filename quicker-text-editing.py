@@ -514,13 +514,13 @@ class QTEPreferences(bpy.types.AddonPreferences, NewQTEPreset):
 aw_temporal_offset_options = [
     ("Fixed", "Fixed Offset",
      "New strips will be this number of frames / seconds ahead of previous strip"),
-    ("RelativeLength", "Time Offset adjusted by word length",
+    ("RelativeLength", "Offset adjusted by word length",
      "Strips will adjust timing based on the length of the previous word \
 compared to the average (ie longer words = bigger gap)"),
-    ("ParentEqual", "Use Parent Duration (Equally-divided)",
+    ("ParentEqual", "Parent Duration (Equally-divided)",
      "New strips will use the duration of the parent sentence strip \
 and appear at equally-distributed times"),
-    ("ParentRelativeLength", "Use Parent Duration (Relative to word length)",
+    ("ParentRelativeLength", "Parent Duration (Relative to word length)",
      "New strips will use the duration of the parent sentence strip \
 and appear at times proportional to the word length (longer words = bigger gap)"),
 ]
@@ -575,6 +575,13 @@ class AppearingWordsOptions(bpy.types.PropertyGroup):
         items=aw_temporal_offset_options,
     )
 
+    extra_word_spacing: bpy.props.FloatProperty(
+        name="Extra word spacing",
+        description="Increase or decrease horizontal space between words",
+        default=0.0,
+        soft_min=-3.0, soft_max=3.0,
+    )
+
 
 class SEQUENCER_OT_split_to_appearing_words(TextSequenceAction):
     """Split the text in a text sequence to several text sequences
@@ -593,7 +600,6 @@ class SEQUENCER_OT_split_to_appearing_words(TextSequenceAction):
 
     def execute(self, context):
         """Do the actual creation of new strips"""
-        # TODO: inter-word spacing adjustments
 
         def get_strip_text_size(strip, text=None):
             """get the size of supplied text based on strip font in px"""
@@ -675,16 +681,19 @@ class SEQUENCER_OT_split_to_appearing_words(TextSequenceAction):
             #
             # Start from parent strip's location and alignment
             #
-            # Maybe TO DO: line splitting
+            # stretch goal: line splitting
             if i == 0:
                 new_strip.location[0] = sequence.location[0]
             else:
                 # New location is previous strip location
                 #  + previous strip width
                 #  + width of space
+                #  + extra spacing specified by user
                 new_strip.location[0] = previous_strip.location[0] + \
                     (get_strip_text_size(sequence, text=previous_strip.text)[0] / rez_x) + \
-                    (get_strip_text_size(sequence, text=" ")[0] / rez_x)
+                    (get_strip_text_size(sequence, text=" ")[0] / rez_x) + \
+                    (prop_group.extra_word_spacing *
+                     get_strip_text_size(sequence, text=" ")[0]/rez_x)
 
             new_strip.text = word
 
@@ -723,6 +732,7 @@ class SEQUENCER_PT_appearing_text(bpy.types.Panel):
         if prop_group.temporal_offset_type != "ParentEqual":
             layout.prop(prop_group, "time_offset", slider=True)
             layout.prop(prop_group, "frame_offset", slider=True)
+        layout.prop(prop_group, "extra_word_spacing", slider=True)
         layout.separator(factor=2.0)
         box = layout.box()
         box.operator("sequencer.split_to_appearing_words", icon='OUTLINER')
