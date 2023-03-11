@@ -627,6 +627,11 @@ class SEQUENCER_OT_split_to_appearing_words(TextSequenceAction):
         ts_letters_count = sum(map(len, ts_words))
         average_word_length = ts_letters_count / len(ts_words)
 
+        # Pre-start sanity check: if somehow the frame_offset is < 0 (eg it is still at
+        # its default of -1), set it to 1
+        if prop_group.frame_offset < 0:
+            prop_group.frame_offset = 1
+
         for i, word in enumerate(ts_words):
             # Give new strip the same properties as the old one
             # Assumption: duplicate() changes selection to newly-created strip
