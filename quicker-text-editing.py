@@ -537,7 +537,7 @@ class AppearingWordsOptions(bpy.types.PropertyGroup):
 
     time_offset: bpy.props.FloatProperty(
         name="Time offset",
-        default=1,
+        default=0.5,
         min=0.0,
         soft_max=5,
         step=5,
@@ -703,6 +703,7 @@ class SEQUENCER_PT_appearing_text(bpy.types.Panel):
     bl_label = "Appearing Words"
     bl_space_type = "SEQUENCE_EDITOR"
     bl_region_type = "UI"
+    bl_category = "QTE"
 
     def draw(self, context):
         """Draw the appearing text panel"""
@@ -725,10 +726,10 @@ class SEQUENCER_PT_appearing_text(bpy.types.Panel):
             # find out if better way to set a default that depends on
             # FPS (ie cannot be set in definition)
             if prop_group.frame_offset == -1:
-                prop_group.frame_offset = (prop_group.time_offset *
-                                           float(bpy.context.scene.render.fps /
-                                                 bpy.context.scene.render.fps_base)
-                                           )
+                prop_group.frame_offset = int(prop_group.time_offset *
+                                              float(bpy.context.scene.render.fps /
+                                                    bpy.context.scene.render.fps_base)
+                                              )
             layout.prop(prop_group, "frame_offset")
         layout.prop(prop_group, "extra_word_spacing", slider=True)
         layout.separator(factor=2.0)
