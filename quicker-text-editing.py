@@ -384,12 +384,24 @@ class QTERemoveKeyMapItem(bpy.types.Operator):
         name="ID",
     )
 
-    _kmi = bpy.context.window_manager.\
-        keyconfigs.user.keymaps['SequencerCommon'].keymap_items
+    def __init__(self):
+        self._kmi = None
+
+    def get_kmi_reference(self, context):
+        """Accessing the keymap while blender is starting up causes an error
+
+        So instead we can create it on demand here
+        """
+        if "SequencerCommon" in bpy.context.window_manager.keyconfigs.user.keymaps:
+            self._kmi = bpy.context.window_manager.\
+                keyconfigs.user.keymaps['SequencerCommon'].keymap_items
 
     def execute(self, context):
         if self.id is None:
             raise ValueError("Please supply an id to remove!")
+        if self._kmi is None:
+            self.get_kmi_reference(context)
+
         self._kmi.remove(self._kmi.from_id(self.id))
 
         return {'FINISHED'}
