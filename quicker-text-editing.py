@@ -534,20 +534,18 @@ class AppearingWordsOptions(bpy.types.PropertyGroup):
     - https://blenderartists.org/t/storing-property-in-operator-which-can-be-set-by-ui-panel/1332800/3
     - https://blenderartists.org/t/is-storing-operator-options-in-the-scene-window-manager-etc-still-the-way-to-go-in-2023/1454103
     """
-    def __init__(self, *args, **kwargs):
-        self.time_offset = 1.0
-        self.frame_offset = int(self.time_offset * self.get_fps())
 
     def get_fps(self):
         return float(bpy.context.scene.render.fps / bpy.context.scene.render.fps_base)
 
     def update_frames_from_time(self, context):
         """When time offset changes, update the frame gap to match (based on FPS)"""
-        self.frame_offset = int(self.time_offset * self.get_fps())
+        # see https://blender.stackexchange.com/a/102019/157744
+        self["frame_offset"] = int(self.time_offset * self.get_fps())
 
     def update_time_from_frames(self, context):
         """When frame offset changes, update the time gap to match (based on FPS)"""
-        self.time_offset = self.frame_offset / self.get_fps()
+        self["time_offset"] = self.frame_offset / self.get_fps()
 
     time_offset: bpy.props.FloatProperty(
         name="Time offset",
@@ -561,10 +559,10 @@ class AppearingWordsOptions(bpy.types.PropertyGroup):
 
     frame_offset: bpy.props.IntProperty(
         name="Frame offset",
-        default=0,
+        default=-1,
         min=0,
         soft_max=300,
-        step=5,
+        step=1,
         description="Frames between words appearing",
         update=update_time_from_frames,
     )
@@ -730,8 +728,15 @@ class SEQUENCER_PT_appearing_text(bpy.types.Panel):
         layout.separator()
 
         if prop_group.temporal_offset_type != "ParentEqual":
-            layout.prop(prop_group, "time_offset", slider=True)
-            layout.prop(prop_group, "frame_offset", slider=True)
+            layout.prop(prop_group, "time_offset")
+            # find out if better way to set a default that depends on
+            # FPS (ie cannot be set in definition)
+            if prop_group.frame_offset == -1:
+                prop_group.frame_offset = (prop_group.time_offset *
+                                           float(bpy.context.scene.render.fps /
+                                                 bpy.context.scene.render.fps_base)
+                                           )
+            layout.prop(prop_group, "frame_offset")
         layout.prop(prop_group, "extra_word_spacing", slider=True)
         layout.separator(factor=2.0)
         box = layout.box()
