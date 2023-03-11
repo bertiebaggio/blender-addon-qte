@@ -514,7 +514,7 @@ class QTEPreferences(bpy.types.AddonPreferences, NewQTEPreset):
 aw_temporal_offset_options = [
     ("Fixed", "Fixed Offset",
      "New strips will be this number of frames / seconds ahead of previous strip"),
-    ("RelativeLength", "Offset adjusted by word length",
+    ("RelativeLength", "Offset relative to word length",
      "Strips will adjust timing based on the length of the previous word \
 compared to the average (ie longer words = bigger gap)"),
     ("ParentEqual", "Parent Duration (Equally-divided)",
@@ -733,7 +733,7 @@ class SEQUENCER_PT_appearing_text(bpy.types.Panel):
         #     layout.label(text=line)
         layout.separator()
 
-        if prop_group.temporal_offset_type != "ParentEqual":
+        if prop_group.temporal_offset_type not in ("ParentEqual", "ParentRelativeLength"):
             layout.prop(prop_group, "time_offset")
             # find out if better way to set a default that depends on
             # FPS (ie cannot be set in definition)
